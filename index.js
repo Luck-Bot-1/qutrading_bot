@@ -24,7 +24,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express     = require('express');
 const axios       = require('axios');
-const { fetchPriceData, fetchHistoricalData, cacheClear } = require('./pricefetcher');
+const { fetchPriceData, fetchHistoricalData, cacheClear, getRateLimitStatus } = require('./pricefetcher');
 const { analyzeSignal, backtest }                         = require('./analyzer');
 
 // ── Environment — no hardcoded credentials ────────────────────
@@ -310,16 +310,43 @@ async function scanPair(pair, tf) {
     scanLock = false; // ALWAYS unlock
   }
 
-  if (!data || !data.ltf) {
+  // Handle structured errors from pricefetcher
+  if (!data || data.error || !data.ltf) {
+    const errType = data?.error;
+    const errMsg  = data?.message;
+
+    if (errType === 'NO_API_KEY') {
+      return send(
+        `⚙️ SETUP REQUIRED\n\n` +
+        `TWELVE_DATA_API_KEY is not set.\n\n` +
+        `Fix:\n` +
+        `1. Go to twelvedata.com → sign up free\n` +
+        `2. Copy your API key\n` +
+        `3. Render dashboard → Environment → Add:\n` +
+        `   TWELVE_DATA_API_KEY = your_key_here\n` +
+        `4. Save → bot redeploys automatically`
+      );
+    }
+
+    if (errType === 'RATE_LIMITED') {
+      const waitSec = getRateLimitStatus() || 60;
+      return send(
+        `⏱ API RATE LIMIT\n\n` +
+        `Twelve Data free plan: 8 calls/minute.\n` +
+        `Please wait ${waitSec} seconds then scan again.\n\n` +
+        `Tip: The bot caches data for 90 seconds.\n` +
+        `Scanning the same pair again immediately uses the cache — no API call needed.`
+      );
+    }
+
     return send(
       `📡 No data — ${pair.symbol}\n\n` +
-      `Possible reasons:\n` +
-      `• API rate limit — wait 60 seconds\n` +
-      `• Pair not on Twelve Data free plan\n` +
-      `• Network issue\n` +
-      (tf === '15s' || tf === '30s' ? `• ${tf} needs Twelve Data Pro plan\n` : '') +
-      `\nTry another pair or wait 1 minute.` +
-      (data?.usedFallback ? `\nNote: Using 1min fallback data` : '')
+      (errMsg ? `Reason: ${errMsg}\n\n` : '') +
+      `Other possible causes:\n` +
+      `• Pair not available on Twelve Data free plan\n` +
+      `• Network issue on Render server\n\n` +
+      `Try EUR/USD OTC or GBP/USD OTC — these are most reliable.\n` +
+      (tf === '15s' || tf === '30s' ? `Note: ${tf} requires Twelve Data Pro plan.\n` : '')
     );
   }
 
@@ -631,9 +658,10 @@ function sendStats() {
 
 function sendStatus() {
   const s = getSession(), n = newsCheck();
+  const rl = getRateLimitStatus();
   return send(
     `⚡ QUTRADING BOT v9.0\n━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `Analyzer: v7.0 | Fetcher: v4.0\n` +
+    `Analyzer: v7.0 | Fetcher: v5.0\n` +
     `Online: YES\n` +
     `Auto Mode: ${autoMode ? `ON (${autoInterval} min)` : 'OFF'}\n` +
     `TF: ${selectedTF} | Expiry: ${expLabel(selectedExpiry)}\n` +
@@ -641,7 +669,8 @@ function sendStatus() {
     `Session: ${s.name} ${s.active ? '✅' : '⚠️'}\n` +
     `News: ${n.on ? `⚠️ ${n.desc}` : 'Clear'}\n` +
     `Breaker: ${isCB() ? 'ACTIVE' : 'Clear'}\n` +
-    `Keep-alive: ${RENDER_URL ? 'Active' : 'Set RENDER_URL'}\n` +
+    `API Rate Limit: ${rl ? `⚠️ Wait ${rl}s` : 'Clear ✅'}\n` +
+    `Keep-alive: ${RENDER_URL ? 'Active ✅' : '⚠️ Set RENDER_URL'}\n` +
     `GMT+6: ${gmt6()}\n` +
     `Pairs: ${OTC_PAIRS.length} OTC | ${LIVE_PAIRS.length} Live | ${CRYPTO_PAIRS.length} Crypto | ${COMM_PAIRS.length} Commodity`
   );
