@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: qutrading-bot
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: TWELVE_DATA_API_KEY
+        sync: false
+    healthCheckPath: /health
+    autoDeploy: true
